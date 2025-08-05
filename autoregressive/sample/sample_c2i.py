@@ -7,12 +7,17 @@ torch.set_float32_matmul_precision('high')
 setattr(torch.nn.Linear, 'reset_parameters', lambda self: None)
 setattr(torch.nn.LayerNorm, 'reset_parameters', lambda self: None)
 from torchvision.utils import save_image
+import sys 
+sys.path.append('./')
 
 import time
 import argparse
-from tokenizer.tokenizer_image.vq_model import VQ_models
 from autoregressive.models.gpt import GPT_models
 from autoregressive.models.generate import generate
+from mimogpt.infer.SelftokPipeline import SelftokPipeline
+from mimogpt.infer.SelftokPipeline import NormalizeToTensor
+from mimogpt.infer.infer_utils import parse_args_from_yaml
+from torchvision.utils import save_image
 
 
 def main(args):
@@ -24,28 +29,21 @@ def main(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # create and load model
-    vq_model = VQ_models[args.vq_model](
-        codebook_size=args.codebook_size,
-        codebook_embed_dim=args.codebook_embed_dim)
-    vq_model.to(device)
-    vq_model.eval()
-    checkpoint = torch.load(args.vq_ckpt, map_location="cpu")
-    vq_model.load_state_dict(checkpoint["model"])
-    del checkpoint
-    print(f"image tokenizer is loaded")
+    cfg = parse_args_from_yaml(args.yml_path)
+    vq_model = SelftokPipeline(cfg=cfg, ckpt_path=args.vq_ckpt, sd3_path=args.sd3_pretrained, datasize=args.image_size, device=device)
 
     # create and load gpt model
     precision = {'none': torch.float32, 'bf16': torch.bfloat16, 'fp16': torch.float16}[args.precision]
     latent_size = args.image_size // args.downsample_size
     gpt_model = GPT_models[args.gpt_model](
         vocab_size=args.codebook_size,
-        block_size=latent_size ** 2,
+        block_size=512,
         num_classes=args.num_classes,
         cls_token_num=args.cls_token_num,
         model_type=args.gpt_type,
     ).to(device=device, dtype=precision)
     
-    checkpoint = torch.load(args.gpt_ckpt, map_location="cpu")
+    checkpoint = torch.load(args.gpt_ckpt, map_location="cpu", weights_only=False)
     if args.from_fsdp: # fspd
         model_weight = checkpoint
     elif "model" in checkpoint:  # ddp
@@ -58,7 +56,7 @@ def main(args):
         raise Exception("please check model weight, maybe add --from-fsdp to run command")
     # if 'freqs_cis' in model_weight:
     #     model_weight.pop('freqs_cis')
-    gpt_model.load_state_dict(model_weight, strict=False)
+    gpt_model.load_state_dict(model_weight, strict=True)
     gpt_model.eval()
     del checkpoint
     print(f"gpt model is loaded")
@@ -76,11 +74,10 @@ def main(args):
     # Labels to condition the model with (feel free to change):
     class_labels = [207, 360, 387, 974, 88, 979, 417, 279]
     c_indices = torch.tensor(class_labels, device=device)
-    qzshape = [len(class_labels), args.codebook_embed_dim, latent_size, latent_size]
 
     t1 = time.time()
     index_sample = generate(
-        gpt_model, c_indices, latent_size ** 2,
+        gpt_model, c_indices, 512,
         cfg_scale=args.cfg_scale, cfg_interval=args.cfg_interval,
         temperature=args.temperature, top_k=args.top_k,
         top_p=args.top_p, sample_logits=True, 
@@ -89,12 +86,14 @@ def main(args):
     print(f"gpt sampling takes about {sampling_time:.2f} seconds.")    
     
     t2 = time.time()
-    samples = vq_model.decode_code(index_sample, qzshape) # output value is between [-1, 1]
+    index_sample = torch.flip(index_sample, dims=[1])
+    index_sample = index_sample.detach().cpu().numpy()
+    samples = vq_model.decoding_with_renderer(index_sample, device) # output value is between [-1, 1]
     decoder_time = time.time() - t2
     print(f"decoder takes about {decoder_time:.2f} seconds.")
-
+    
     # Save and display images:
-    save_image(samples, "sample_{}.png".format(args.gpt_type), nrow=4, normalize=True, value_range=(-1, 1))
+    save_image(samples, "sample_{}.png".format(args.gpt_type), nrow=4)
     print(f"image is saved to sample_{args.gpt_type}.png")
 
 
@@ -107,8 +106,9 @@ if __name__ == "__main__":
     parser.add_argument("--cls-token-num", type=int, default=1, help="max token number of condition input")
     parser.add_argument("--precision", type=str, default='bf16', choices=["none", "fp16", "bf16"]) 
     parser.add_argument("--compile", action='store_true', default=False)
-    parser.add_argument("--vq-model", type=str, choices=list(VQ_models.keys()), default="VQ-16")
-    parser.add_argument("--vq-ckpt", type=str, default=None, help="ckpt path for vq model")
+    parser.add_argument("--yml-path", type=str, required=True, help="yml for tokenizer")
+    parser.add_argument("--vq-ckpt", type=str, required=True, help="ckpt path for vq model")
+    parser.add_argument("--sd3-pretrained", type=str, required=True, help="ckpt path for vae")
     parser.add_argument("--codebook-size", type=int, default=16384, help="codebook size for vector quantization")
     parser.add_argument("--codebook-embed-dim", type=int, default=8, help="codebook dimension for vector quantization")
     parser.add_argument("--image-size", type=int, choices=[256, 384, 512], default=384)

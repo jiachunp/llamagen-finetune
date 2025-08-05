@@ -10,11 +10,16 @@ from torchvision import transforms
 import numpy as np
 import argparse
 import os
+import sys 
+sys.path.append('./')
 
 from utils.distributed import init_distributed_mode
 from dataset.augmentation import center_crop_arr
 from dataset.build import build_dataset
-from tokenizer.tokenizer_image.vq_model import VQ_models
+from mimogpt.infer.SelftokPipeline import SelftokPipeline
+from mimogpt.infer.SelftokPipeline import NormalizeToTensor
+from mimogpt.infer.infer_utils import parse_args_from_yaml
+from torchvision.utils import save_image
 
 
 #################################################################################
@@ -42,14 +47,8 @@ def main(args):
         os.makedirs(os.path.join(args.code_path, f'{args.dataset}{args.image_size}_labels'), exist_ok=True)
 
     # create and load model
-    vq_model = VQ_models[args.vq_model](
-        codebook_size=args.codebook_size,
-        codebook_embed_dim=args.codebook_embed_dim)
-    vq_model.to(device)
-    vq_model.eval()
-    checkpoint = torch.load(args.vq_ckpt, map_location="cpu")
-    vq_model.load_state_dict(checkpoint["model"])
-    del checkpoint
+    cfg = parse_args_from_yaml(args.yml_path)
+    vq_model = SelftokPipeline(cfg=cfg, ckpt_path=args.vq_ckpt, sd3_path=args.sd3_pretrained, datasize=args.image_size, device=device)
 
     # Setup data:
     if args.ten_crop:
@@ -62,10 +61,15 @@ def main(args):
         ])
     else:
         crop_size = args.image_size 
+        # transform = transforms.Compose([
+        #     transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, crop_size)),
+        #     transforms.ToTensor(),
+        #     transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+        # ])
         transform = transforms.Compose([
-            transforms.Lambda(lambda pil_image: center_crop_arr(pil_image, crop_size)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+            transforms.Resize(crop_size),
+            transforms.CenterCrop(crop_size),
+            NormalizeToTensor(),
         ])
     dataset = build_dataset(args, transform=transform)
     if not args.debug:
@@ -91,18 +95,19 @@ def main(args):
     total = 0
     for x, y in loader:
         x = x.to(device)
-        if args.ten_crop:
-            x_all = x.flatten(0, 1)
-            num_aug = 10
-        else:
-            x_flip = torch.flip(x, dims=[-1])
-            x_all = torch.cat([x, x_flip])
-            num_aug = 2
+        # if args.ten_crop:
+        #     x_all = x.flatten(0, 1)
+        #     num_aug = 10
+        # else:
+        #     x_flip = torch.flip(x, dims=[-1])
+        #     x_all = torch.cat([x, x_flip])
+        #     num_aug = 2
         y = y.to(device)
+        # with torch.no_grad():
+        #     _, _, [_, _, indices] = vq_model.encode(x_all)
+        # codes = indices.reshape(x.shape[0], num_aug, -1)
         with torch.no_grad():
-            _, _, [_, _, indices] = vq_model.encode(x_all)
-        codes = indices.reshape(x.shape[0], num_aug, -1)
-
+            codes = vq_model.encoding(x, device=device)
         x = codes.detach().cpu().numpy()    # (1, num_aug, args.image_size//16 * args.image_size//16)
         train_steps = rank + total
         np.save(f'{args.code_path}/{args.dataset}{args.image_size}_codes/{train_steps}.npy', x)
@@ -122,8 +127,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-path", type=str, required=True)
     parser.add_argument("--code-path", type=str, required=True)
-    parser.add_argument("--vq-model", type=str, choices=list(VQ_models.keys()), default="VQ-16")
+    # parser.add_argument("--vq-model", type=str, choices=list(VQ_models.keys()), default="VQ-16")
+    parser.add_argument("--yml-path", type=str, required=True, help="yml for tokenizer")
     parser.add_argument("--vq-ckpt", type=str, required=True, help="ckpt path for vq model")
+    parser.add_argument("--sd3-pretrained", type=str, required=True, help="ckpt path for vae")
     parser.add_argument("--codebook-size", type=int, default=16384, help="codebook size for vector quantization")
     parser.add_argument("--codebook-embed-dim", type=int, default=8, help="codebook dimension for vector quantization")
     parser.add_argument("--dataset", type=str, default='imagenet')

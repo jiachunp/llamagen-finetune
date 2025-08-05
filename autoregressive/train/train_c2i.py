@@ -20,6 +20,7 @@ from utils.distributed import init_distributed_mode
 from utils.ema import update_ema, requires_grad
 from dataset.build import build_dataset
 from autoregressive.models.gpt import GPT_models
+import wandb
 
 
 #################################################################################
@@ -89,9 +90,18 @@ def main(args):
     # training args
     logger.info(f"{args}")
 
+
     # training env
     logger.info(f"Starting rank={rank}, seed={seed}, world_size={dist.get_world_size()}.")
 
+    # wandb
+    if not args.no_wandb and rank==0:
+        os.environ["WANDB_DIR"] = experiment_dir  
+        wandb.init(
+            project=args.wandb_project, 
+            name = f"{time_record}-{model_string_name}-2dsin",
+            config=vars(args)
+        )
 
     # Setup model
     if args.drop_path_rate > 0.0:
@@ -101,7 +111,7 @@ def main(args):
     latent_size = args.image_size // args.downsample_size
     model = GPT_models[args.gpt_model](
         vocab_size=args.vocab_size,
-        block_size=latent_size ** 2,
+        block_size=512,
         num_classes=args.num_classes,
         cls_token_num=args.cls_token_num,
         model_type=args.gpt_type,
@@ -188,6 +198,8 @@ def main(args):
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
             z_indices = x.reshape(x.shape[0], -1)
+            z_indices_flipped = torch.flip(z_indices, dims=[1])
+            z_indices = z_indices_flipped
             c_indices = y.reshape(-1)
             assert z_indices.shape[0] == c_indices.shape[0]
             with torch.cuda.amp.autocast(dtype=ptdtype):  
@@ -219,6 +231,10 @@ def main(args):
                 dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
                 avg_loss = avg_loss.item() / dist.get_world_size()
                 logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
+
+                if not args.no_wandb and rank==0:
+                    wandb.log({"train_loss": avg_loss}, step=train_steps)
+
                 # Reset monitoring variables:
                 running_loss = 0
                 log_steps = 0
@@ -290,5 +306,7 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt-every", type=int, default=5000)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
     parser.add_argument("--mixed-precision", type=str, default='bf16', choices=["none", "fp16", "bf16"]) 
+    parser.add_argument("--wandb-project", type=str, default='c2i_selftok')
+    parser.add_argument("--no-wandb", action='store_true')
     args = parser.parse_args()
     main(args)
