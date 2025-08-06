@@ -99,7 +99,7 @@ def main(args):
         os.environ["WANDB_DIR"] = experiment_dir  
         wandb.init(
             project=args.wandb_project, 
-            name = f"{time_record}-{model_string_name}-2dsin",
+            name = f"{time_record}-{model_string_name}-2dsin-E31",
             config=vars(args)
         )
 
@@ -111,7 +111,7 @@ def main(args):
     latent_size = args.image_size // args.downsample_size
     model = GPT_models[args.gpt_model](
         vocab_size=args.vocab_size,
-        block_size=512,
+        block_size=1536,
         num_classes=args.num_classes,
         cls_token_num=args.cls_token_num,
         model_type=args.gpt_type,

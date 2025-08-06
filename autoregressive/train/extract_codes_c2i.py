@@ -20,8 +20,41 @@ from mimogpt.infer.SelftokPipeline import SelftokPipeline
 from mimogpt.infer.SelftokPipeline import NormalizeToTensor
 from mimogpt.infer.infer_utils import parse_args_from_yaml
 from torchvision.utils import save_image
+from PIL import Image
 
 
+
+def resize_and_pad(image, target_size=256, padding_color="black"):
+    """
+    Resizes the image, upsampling if necessary, and pads to create a square.
+
+    Args:
+        image: PIL Image object.
+        target_size: Target size for the *largest* dimension.
+        padding_color: 'black' or 'white' (or any valid PIL color).
+
+    Returns:
+        A new PIL Image object, square and padded.
+    """
+    width, height = image.size
+
+    # Calculate scaling factor, upsampling if needed
+    scale = target_size / max(width, height)
+    new_width = int(width * scale)
+    new_height = int(height * scale)
+
+    # Resize (upsample or downsample)
+    resized_image = image.resize((new_width, new_height), Image.LANCZOS)
+
+    # Create a new square image
+    square_image = Image.new("RGB", (target_size, target_size), color=padding_color)
+
+    # Calculate paste position (center)
+    paste_x = (target_size - new_width) // 2
+    paste_y = (target_size - new_height) // 2
+
+    square_image.paste(resized_image, (paste_x, paste_y))
+    return square_image
 #################################################################################
 #                                  Training Loop                                #
 #################################################################################
@@ -66,9 +99,13 @@ def main(args):
         #     transforms.ToTensor(),
         #     transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
         # ])
+        # transform = transforms.Compose([
+        #     transforms.Resize(crop_size),
+        #     transforms.CenterCrop(crop_size),
+        #     NormalizeToTensor(),
+        # ])
         transform = transforms.Compose([
-            transforms.Resize(crop_size),
-            transforms.CenterCrop(crop_size),
+            transforms.Lambda(lambda pil_image: resize_and_pad(pil_image, crop_size, 'white')),
             NormalizeToTensor(),
         ])
     dataset = build_dataset(args, transform=transform)

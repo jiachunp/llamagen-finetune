@@ -149,7 +149,7 @@ def main(args):
         os.environ["WANDB_DIR"] = experiment_dir   
         wandb.init(
             project=args.wandb_project, 
-            name = f"{timestamp}-{model_string_name}",
+            name = f"{timestamp}-{model_string_name}-2dsin-E31",
             config=vars(args)
         )
 
@@ -164,7 +164,7 @@ def main(args):
     latent_size = args.image_size // args.downsample_size
     model = GPT_models[args.gpt_model](
         vocab_size=args.vocab_size,
-        block_size=latent_size ** 2,
+        block_size=1536,
         num_classes=args.num_classes,
         cls_token_num=args.cls_token_num,
         model_type=args.gpt_type,
@@ -264,6 +264,8 @@ def main(args):
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
             z_indices = x.reshape(x.shape[0], -1)
+            z_indices_flipped = torch.flip(z_indices, dims=[1])
+            z_indices = z_indices_flipped
             c_indices = y.reshape(-1)
             assert z_indices.shape[0] == c_indices.shape[0]
 
@@ -384,7 +386,7 @@ if __name__ == "__main__":
     parser.add_argument("--mixed-precision", type=str, choices=["fp32", "tf32", "fp16", "bf16"], default='bf16') 
     parser.add_argument("--data-parallel", type=str, choices=["sdp", "fsdp", "hsdp"], default="fsdp")
     parser.add_argument("--grad-precision", type=str, choices=["fp32", "fp16", "bf16"])
-    parser.add_argument("--wandb-project", type=str, default='c2i_fsdp')
+    parser.add_argument("--wandb-project", type=str, default='c2i_selftok')
     parser.add_argument("--no-wandb", action='store_true')
     args = parser.parse_args()
     main(args)

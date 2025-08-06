@@ -191,11 +191,13 @@ class SelftokPipeline():
        
         pretrain = ckpt_path
         
-        state_dict = torch.load(pretrain, map_location="cpu")
+        #state_dict = torch.load(pretrain, map_location="cpu")
+        state_dict = load_file(pretrain)
 
         print(f"Loading all...")
         if self.ema_decoder==True:
             self.ema.load_state_dict(state_dict['ema_state_dict'])
+        
         self.model.load_state_dict(state_dict, strict=False)
         
         if self.ema_decoder==True:
@@ -207,7 +209,7 @@ class SelftokPipeline():
             self._steps, self.start, self.cut_of_k, val_schedule='uniform', shift=1.0, **cfg.tokenizer.params.noise_schedule_config,
         )
 
-        self.cond_vary = True
+        self.cond_vary = False
         self.saved_images = 8
 
     

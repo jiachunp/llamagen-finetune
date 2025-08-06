@@ -1,7 +1,17 @@
 # !/bin/bash
 set -x
+export PYTHONPATH="${PWD}:${PYTHONPATH}"
+export WANDB_NAME="run_$(date +%Y%m%d_%H%M%S)"
+export WANDB_PROJECT="c2i_selftok"
+export WANDB_API_KEY="0b30f581d65172381c1f1a45f928210cab80f1de"
 
-torchrun \
---nnodes=$nnodes --nproc_per_node=$nproc_per_node --node_rank=$node_rank \
---master_addr=$master_addr --master_port=$master_port \
-autoregressive/train/train_c2i_fsdp.py "$@"
+torchrun --nnodes=1 --nproc_per_node=8 --node_rank=0 \
+    --master_port=12335 \
+    autoregressive/train/train_c2i_fsdp.py \
+    --code-path /home/jovyan/datasets/code-imagenet-E31 \
+    --cloud-save-path ./results_ckpt_e31 \
+    --gpt-model GPT-XL --gpt-type c2i \
+    --vocab-size 16384 \
+    --image-size 512 \
+    --global-batch-size 128 \
+    --no-local-save 
