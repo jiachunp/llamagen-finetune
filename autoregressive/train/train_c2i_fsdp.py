@@ -149,7 +149,7 @@ def main(args):
         os.environ["WANDB_DIR"] = experiment_dir   
         wandb.init(
             project=args.wandb_project, 
-            name = f"{timestamp}-{model_string_name}-2dsin-E31",
+            name = f"{timestamp}-{model_string_name}-rope-E31",
             config=vars(args)
         )
 

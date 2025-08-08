@@ -37,7 +37,7 @@ def main(args):
     latent_size = args.image_size // args.downsample_size
     gpt_model = GPT_models[args.gpt_model](
         vocab_size=args.codebook_size,
-        block_size=512,
+        block_size=1536,
         num_classes=args.num_classes,
         cls_token_num=args.cls_token_num,
         model_type=args.gpt_type,
@@ -77,7 +77,7 @@ def main(args):
 
     t1 = time.time()
     index_sample = generate(
-        gpt_model, c_indices, 512,
+        gpt_model, c_indices, 1536,
         cfg_scale=args.cfg_scale, cfg_interval=args.cfg_interval,
         temperature=args.temperature, top_k=args.top_k,
         top_p=args.top_p, sample_logits=True, 
@@ -93,7 +93,7 @@ def main(args):
     print(f"decoder takes about {decoder_time:.2f} seconds.")
     
     # Save and display images:
-    save_image(samples, "sample_{}.png".format(args.gpt_type), nrow=4)
+    save_image(samples, "sample_{}_2d.png".format(args.gpt_type), nrow=4)
     print(f"image is saved to sample_{args.gpt_type}.png")
 
 

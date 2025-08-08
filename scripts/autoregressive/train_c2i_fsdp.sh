@@ -9,7 +9,8 @@ torchrun --nnodes=1 --nproc_per_node=8 --node_rank=0 \
     --master_port=12335 \
     autoregressive/train/train_c2i_fsdp.py \
     --code-path /home/jovyan/datasets/code-imagenet-E31 \
-    --cloud-save-path ./results_ckpt_e31 \
+    --gpt-resume /home/jovyan/llamagen-finetune/results_ckpt_e31_rope/20250807071554-GPT-XL/0110000 \
+    --cloud-save-path ./results_ckpt_e31_rope \
     --gpt-model GPT-XL --gpt-type c2i \
     --vocab-size 16384 \
     --image-size 512 \

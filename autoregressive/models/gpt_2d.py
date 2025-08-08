@@ -13,12 +13,14 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from utils.drop_path import DropPath
+from autoregressive.models.pos_encoding import PositionalEncoding
 
 
 def find_multiple(n: int, k: int):
     if n % k == 0:
         return n
     return n + k - (n % k)
+
 
 @dataclass
 class ModelArgs:
@@ -205,7 +207,7 @@ class Attention(nn.Module):
         self.resid_dropout = nn.Dropout(config.resid_dropout_p)
 
     def forward(
-        self, x: torch.Tensor, freqs_cis: torch.Tensor = None, 
+        self, x: torch.Tensor,
         input_pos: Optional[torch.Tensor] = None, 
         mask: Optional[torch.Tensor] = None
     ):
@@ -216,9 +218,6 @@ class Attention(nn.Module):
         xq = xq.view(bsz, seqlen, self.n_head, self.head_dim)
         xk = xk.view(bsz, seqlen, self.n_kv_head, self.head_dim)
         xv = xv.view(bsz, seqlen, self.n_kv_head, self.head_dim)
-
-        xq = apply_rotary_emb(xq, freqs_cis)
-        xk = apply_rotary_emb(xk, freqs_cis)
 
         xq, xk, xv = map(lambda x: x.transpose(1, 2), (xq, xk, xv))
 
@@ -251,8 +250,8 @@ class TransformerBlock(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
     def forward(
-        self, x: torch.Tensor, freqs_cis: torch.Tensor, start_pos: int, mask: Optional[torch.Tensor] = None):
-        h = x + self.drop_path(self.attention(self.attention_norm(x), freqs_cis, start_pos, mask))
+        self, x: torch.Tensor, start_pos: int, mask: Optional[torch.Tensor] = None):
+        h = x + self.drop_path(self.attention(self.attention_norm(x),  start_pos, mask))
         out = h + self.drop_path(self.feed_forward(self.ffn_norm(h)))
         return out
 
@@ -276,10 +275,9 @@ class Transformer(nn.Module):
         self.tok_embeddings = nn.Embedding(config.vocab_size, config.dim)
         self.tok_dropout = nn.Dropout(config.token_dropout_p)
 
-        # 2d rotary pos embedding
-        # grid_size = int(self.block_size ** 0.5)
-        # assert grid_size * grid_size == self.block_size
-        self.freqs_cis = precompute_freqs_cis(self.block_size, self.config.dim // self.config.n_head, self.config.rope_base, self.cls_token_num)
+        #absolution positional embedding 
+        self.pos_emb = PositionalEncoding(config.dim, self.config.block_size + config.cls_token_num)
+
         # transformer blocks
         dpr = [x.item() for x in torch.linspace(0, config.drop_path_rate, config.n_layer)]
         self.layers = torch.nn.ModuleList()
@@ -325,9 +323,6 @@ class Transformer(nn.Module):
 
         causal_mask = torch.tril(torch.ones(self.max_seq_length, self.max_seq_length, dtype=torch.bool))
         self.causal_mask = causal_mask.unsqueeze(0).repeat(self.max_batch_size, 1, 1)
-        # grid_size = int(self.config.block_size ** 0.5)
-        # assert grid_size * grid_size == self.block_size
-        self.freqs_cis = precompute_freqs_cis(self.block_size, self.config.dim // self.config.n_head, self.config.rope_base, self.cls_token_num)
 
     def forward(
         self, 
@@ -338,12 +333,15 @@ class Transformer(nn.Module):
         mask: Optional[torch.Tensor] = None,
         valid: Optional[torch.Tensor] = None,
     ):
+    
         if idx is not None and cond_idx is not None: # training or naive inference
             cond_embeddings = self.cls_embedding(cond_idx, train=self.training)[:,:self.cls_token_num]
             token_embeddings = self.tok_embeddings(idx)
             token_embeddings = torch.cat((cond_embeddings, token_embeddings), dim=1)
-            h = self.tok_dropout(token_embeddings)
-            self.freqs_cis = self.freqs_cis.to(h.device)
+
+            pos_emb = self.pos_emb(token_embeddings).to(token_embeddings.device)
+
+            h = self.tok_dropout(token_embeddings + pos_emb)
         else:
             if cond_idx is not None: # prefill in inference
                 token_embeddings = self.cls_embedding(cond_idx, train=self.training)[:,:self.cls_token_num]
@@ -351,16 +349,18 @@ class Transformer(nn.Module):
                 token_embeddings = self.tok_embeddings(idx)
             bs = token_embeddings.shape[0]
             mask = self.causal_mask[:bs, None, input_pos]
-            h = self.tok_dropout(token_embeddings)
-            self.freqs_cis = self.freqs_cis
-        
-        if self.training:
-            freqs_cis = self.freqs_cis[:token_embeddings.shape[1]]
-        else:
-            freqs_cis = self.freqs_cis[input_pos]
+
+            pos_emb = self.pos_emb(token_embeddings).to(device=token_embeddings.device, dtype=token_embeddings.dtype)
+
+            if not self.training: 
+                position_ids = torch.arange(input_pos.item() + 1, device=token_embeddings.device).unsqueeze(0)
+                pos_emb = self.pos_emb(position_ids).to(device=token_embeddings.device, dtype=token_embeddings.dtype)
+
+            h = self.tok_dropout(token_embeddings + pos_emb[-1,:])
+
         # transformer blocks
         for layer in self.layers:
-            h = layer(h, freqs_cis, input_pos, mask)
+            h = layer(h, input_pos, mask)
         
         # output layers
         h = self.norm(h)
